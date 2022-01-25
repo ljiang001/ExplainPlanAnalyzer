@@ -1,0 +1,201 @@
+<div style="width:55%;border:grey;border-style: dashed;border-width: 5px;height:98%;overflow-y: scroll;display: inline-block;">
+    <p> The explain plan has been read, total outlier(s) found: {{data.total_outliers}} <p></p>
+    {% if data.outliers_row %}
+    <div style="border-bottom: solid 1px gray">
+        <h3>1. Actual Vs Estimated Rows:</h3>
+        {% for item in data.outliers_row %}
+        <div>
+            <div style="width:20px;display: inline-block;">
+                <a href="#{{item.line_num}}">{{item.line_num}}</a>
+            </div>
+            <div style="display: inline-block;">
+                <pre style="background-color:yellow">{{item.line}}</pre>
+            </div>
+        </div>
+        {% endfor %}
+        <div>
+            <h4>Resolution:</h4>
+            <h5>Table: It’s the table's actual & estimated rows are way off</h5>
+            <ol>
+                <li>Consider to do manual analyze on the table.</li>
+                <li>As a one off case  consider doing a manual analyze. </li>
+                <li>Check Default_statistics_Target parameter. If the current value is 100 consider increasing to 1000.The Default statistics target can be increased on the specific table column also. 
+                    <br>Example: Alter table t alter column k set statistics 1000; 
+                </li>
+                <li>Check last_autovacuum,last_autoanalyze columns in pg_stat_user_tables table for the table. Consider tuning auto vacuum parameters if auto vacuum is not catching up. </li>
+            </ol>
+
+            <h5> CTE Calls:</h5>
+            <ol>
+                <li> Analyze the query used in CTE to identify any bottlenecks. </li>
+                <li> Try with not materialized hint. Sometimes it might give performance benefit when the following conditions related to CTE is met
+                    <ul>
+                        <li>The query is not recursive </li>
+                        <li>The query is side effect free [No volatile functions] </li>
+                        <li>The parent query is run only once  </li>
+                    </ul>
+                    The query is not recursive 
+                 </li>   
+                </li>
+            </ol>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if data.outliers_memory %}
+    <div style="border-bottom: solid 1px gray">
+        <h3>2. Sort Nodes:</h3>
+        <div>
+        {% for item in data.outliers_memory %}
+            <div> 
+                <div style="width:20px;display: inline-block;">
+                    <a href="#{{item.line_num}}">{{item.line_num}}</a>
+                </div>
+                <div style="display: inline-block;">
+                    <pre style="background-color:orange">{{item.line}}</pre>
+                </div>
+            </div>
+        {% endfor %}
+        </div>
+
+        <div>
+            <h4>Resolutionn:</h4>
+            <ol>
+                <li>Sort Method is external merge sort  consider if work_mem parameter can be increased. </li>
+            </ol>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if data.outliers_function %}
+    <div style="border-bottom: solid 1px gray">
+        <h3>3. User Defined Function Calls  :</h3>
+        {% for item in data.outliers_function %}
+        <div>
+            <div style="width:20px;display: inline-block;">
+                <a href="#{{item.line_num}}">{{item.line_num}}</a>
+            </div>
+            <div style="display: inline-block;">
+                <pre style="color:darkblue;font-weight: bold;">{{item.line}}</pre>
+            </div>
+        </div>
+        {% endfor %}
+        <div>
+            <h4>Resolution:</h4>
+            <ol>
+                <li>
+                    Analyze the query in the function. Create a temporary table and use the query in the function to insert data into temporary table. In the actual query replace the function call with the newly created temporary table. 
+                </li>
+                <li>
+                    Analyze the query in the function. Take the query in function and use it as a sub query for the actual query. We replace the function call with sub query. 
+                </li>
+
+            </ol>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if data.outliers_time %}
+    <div>
+        <h3>4. Actual Time Taken:</h3>
+        <p>(Actual time taken greater than 30 second or 20 % of total execution time per node)</p>
+        {% for item in data.outliers_time %}
+        <div>
+            <div style="width:20px;display: inline-block;">
+                <a href="#{{item.line_num}}">{{item.line_num}}</a>
+            </div>
+            <div style="display: inline-block;border-color:red;border-style:solid; border-width:5px">
+                <pre>{{item.line}}</pre>
+                <p>{{item.note}}</p>
+            </div>
+            <div>
+                {% if "Seq Scan " in item.line %}
+                <h4> Business Rule 1: Sequential Scan <br>Resolution</h4>
+                <p></p>
+                <ol>
+                    <li>
+                        Understand the selectivity of the join in the query 
+                            <br>If the query is retrieving most of the data from the table consider if parallel scans are being carried out. Parameters to check and tune if necessary – <b>max_parallel_workers_per_gather</b>
+                            <br>If the selectivity of rows is less then try adding an appropriate <b>index</b>. Once index is added analyze the table again. 
+                    </li>
+                    <li>
+                        check  in pg_stat_user_tables if the auto vacuum is catching up, when was the last time the table was analyzed or vacuumed. Check if auto vacuum parameters needs any change. 
+                    </li>
+                </ol>
+                {% endif %}
+            </div>
+            <div>
+                {% if "Index Only Scan" in item.line %}
+                <h4> Business Rule 2: Index Only Scan <br>Possible Reasons And Solution</h4>
+                <ol>
+                    <li>
+                        More updates/deletes in the table than auto vacuum is capable of scanning / cleaning up 
+                    </li>
+                    <li>
+                        No VACUUM for that table
+                    </li>
+                    <li>
+                        Long running transactions which are  stopping the auto vacuum from removing old row  versions.
+                    </li>
+                    <li>
+                        Check if we could create a partial or a covered index or both in the scenario.
+                    </li>
+                </ol>
+                {% endif %}
+            </div>
+
+            <div>
+                {% if "Bitmap Index Scan" in item.line %}
+                <h4>Business Rule 3: Bit Map Scan <br> Possible Reasons And Solution:</h4>
+                <p></p>
+                <ol>
+                    <li>Check for Heap Blocks which are Lossy and the plan has a recheck condition that filters the records. If the bitmap gets too large optimizer converts it to "lossy" style, in which it only remembers which pages contain  matching  tuples  instead of remembering each tuple individually.
+                         When that happens, the table-visiting phase has to examine each tuple on the page and recheck the scan condition to see which tuples to return. Only if the bitmap is lossy (which EXPLAIN (ANALYZE) will indicate) the recheck is performed.
+                        <br>A bitmap scan becomes lossy if work_mem is not big enough to contain a bitmap that contains one bit per table row. Try increasing the work_mem to see if there is any improvement in execution. 
+                    </li>
+                    <li>Check by creating a combined index covering more than one field and test if it improves the performance. Optimizer in this case might use index only scan and move away from bit map scan. </li>
+                    <li>Bit map scans handles LIMIT clause in SQL query poorly. Check if LIMIT clause exists if yes check for a combined index or disable bitmap scan in the session to see if optimizer picks better scan. </li>
+                </ol>
+                {% elif "Index Scan" in item.line %}
+                <h4> Business Rule 4: Index Scan <br>Possible Reasons And Solution</h4>
+                <ol>
+                    <li>
+                        Check if we could create a partial or a covered index or both in the scenario
+                    </li>
+                    <li>
+                        Postgres estimates the impact of filters on a table by considering each filter independently. Sometimes this may lead incorrect row estimations in case there is correlation between columns used in the filter condition. Check if the columns used in the filter condition are correlated. 
+                        If they are correlated try creating extended statistics on the columns so that the optimizer could better estimate the rows. 
+                        <br>Example: CREATE STATISTICS t_s (dependencies) ON a,b FROM t; 
+                    </li>
+                    <li>
+                        Check if the statistics on the table are updated. Check if auto vacuum parameters needs any change if auto vacuuming is not catching up. 
+                    </li>
+                    <li>
+                        Check if the table size and number of rows that the index is working on. The table might be a good candidate for partitioning if its size is big.
+                    </li>
+                </ol>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+<div style="display:inline-block;width:43%;height:98%;overflow-y: scroll;border-style: double;border-width: 5px;overflow-x: scroll;">
+    <div style="border:rgb(32, 23, 23);">
+        {% for item in data.plan %}
+            <div style="border-bottom: solid 1px gray;"> 
+                <div style="width:20px;display: inline-block;" id="{{item.line_num}}">
+                    {{item.line_num}}
+                </div>
+                <div style="display: inline-block;{{item.style}}">
+                    <pre>{{item.line}}</pre>
+                    {% if item.note %}
+                    <pre>(Note: <b>{{item.note}})</b></pre>
+                    {% endif %}
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+</div>
